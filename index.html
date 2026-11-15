@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NASA_VARTA – FireWatch dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<style>
+*{box-sizing:border-box}
+body{margin:0;display:flex;height:100vh;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:#faf8f5;color:#2c323b}
+#map{flex:1;height:100vh}
+.side{width:480px;height:100vh;background:#fffdf9;border-left:1px solid #eeeade;display:flex;flex-direction:column;z-index:1000}
+.head{padding:18px 20px 12px;border-bottom:1px solid #f2efe9}
+.head h2{margin:0 0 3px;font-size:16px}.head p{margin:0;font-size:12px;color:#8c939e}
+.body{padding:14px 20px 24px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+.card{background:#fff;border:1px solid #f0ece1;border-radius:8px;padding:12px 14px}
+.card h4{margin:0 0 8px;font-size:12px;color:#5b6370}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+select,button{font:inherit;font-size:12px;padding:5px 8px;border:1px solid #d9d4c5;border-radius:5px;background:#fff}
+button.on{background:#fde8d7;border-color:#c2410c}
+.note{font-size:11px;color:#8c939e;line-height:1.45;margin:0}
+.err{color:#be123c}
+ol,ul{margin:0;padding-left:18px;font-size:12px;line-height:1.7}
+#cal{overflow-x:auto}#cal svg{display:block}
+.legendbar{display:flex;align-items:center;gap:6px;font-size:11px;color:#8c939e;margin-top:6px}
+.legendbar .g{width:120px;height:8px;border-radius:2px}
+.al{border-top:1px solid #f0ece1;padding:8px 0;font-size:12px;line-height:1.5}
+.badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;color:#fff;font-weight:600}
+details pre{white-space:pre-wrap;font-size:10px;background:#faf8f5;padding:6px;border-radius:4px;margin:4px 0 0}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="side">
+  <div class="head"><h2>FireWatch · analyst dashboard</h2>
+  <p>Live view of the fire-monitoring system. Updates every 5 minutes.</p></div>
+  <div class="body">
+    <div class="card"><h4>Is the system working?</h4><div id="status" style="font-size:12px">Loading…</div></div>
+    <div class="card"><h4>Country</h4>
+      <div class="row"><select id="sel"></select></div>
+      <p class="note" style="margin-bottom:8px">Choose a country. To look at a smaller region, press "Select area of interest" and click two corners on the map.</p>
+      <div class="row"><button id="selBtn" onclick="startDraw()">Select area of interest</button><button onclick="wholeCountry()">Whole country</button></div>
+      <p class="note" id="info">Loading…</p></div>
+
+    <div class="card" id="fcCard" style="display:none"><h4>Probability forecast (whole country): significant burning day</h4>
+      <div id="fc" style="font-size:12px;line-height:1.5"></div></div>
+
+    <div class="card" id="calCard" style="display:none"><h4>Fire calendar: when did it burn?</h4>
+      <p class="note" style="margin-bottom:8px">Each row is a year, each square is one week from January to December. Darker = more fires seen by satellites. Grey = no data. Click a square to see on the map where it burned that week.</p>
+      <div class="row"><button id="mAct" class="on" onclick="setMode('act')">How much burned</button>
+      <button id="mAno" onclick="setMode('ano')">Unusual weeks</button></div>
+      <div id="cal"></div><div class="legendbar" id="leg"></div>
+      <p class="note" id="calNote" style="margin-top:6px"></p>
+      <p class="note" id="mapNote"></p><button onclick="allTime()" style="margin-top:4px">Show map for all years</button></div>
+
+    <div class="card" id="critCard" style="display:none"><h4>Fire season: the busiest weeks of the year</h4><ol id="crit"></ol></div>
+    <div class="card" id="anoCard" style="display:none"><h4>Most unusual weeks (much more fire than usual for that time of year)</h4><ul id="anoList"></ul></div>
+
+    <div class="card"><h4>Alerts and daily reports that were sent</h4><div id="log" style="font-size:12px">–</div></div>
+    <div class="card"><h4>How the satellites are combined</h4><p class="note" id="meth">–</p></div>
+    <div class="card"><h4>About</h4><p class="note">FireWatch combines two decades of satellite fire detections (MODIS since 2000, VIIRS since 2012) into one comparable calendar for each country or any area you select. It highlights unusual periods and estimates the chance of high fire activity in the next days. It is a statistical early-warning aid for analysts, not an observation of any single fire. Data: NASA FIRMS. Weather: Open-Meteo.</p></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const $=id=>document.getElementById(id);
+const map=L.map('map',{zoomControl:false,minZoom:3,maxZoom:16}).setView([48.38,31.17],6);
+L.control.zoom({position:'bottomright'}).addTo(map);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{attribution:'Tiles &copy; Esri',maxZoom:16}).addTo(map);
+L.tileLayer.wms('https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/38849e88daab4f8f46dbb6e93f4c306f/',
+  {layers:'fires_viirs_24',format:'image/png',transparent:true,version:'1.1.1',attribution:'NASA FIRMS'}).addTo(map);
+
+let aois=[],rect=null,cur=null,mode='act',R=null,marks=[];
+const api=async p=>{const r=await fetch(p);if(!r.ok)throw new Error('HTTP '+r.status+' for '+p);return r.json()};
+
+async function init(){
+  try{aois=await api('/api/aois')}
+  catch(e){$('info').innerHTML='<span class="err">Backend not reachable. Run <b>python api.py</b> and open http://localhost:8000</span>';return}
+  $('sel').innerHTML=aois.map((a,i)=>`<option value="${i}">${a.name}</option>`).join('');
+  $('sel').onchange=()=>load(+$('sel').value);
+  load(0);setInterval(()=>load(+$('sel').value),300000);setInterval(showStatus,30000);
+}
+
+let WORLD=null,poly=null,aoiBox=null,aoiRect=null,drawing=false,corner=null,period=null,cellLayer=null;
+const cvs=L.canvas({padding:.5});
+async function outline(code){
+  if(!WORLD){try{WORLD=await (await fetch('https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json')).json()}catch(e){WORLD={features:[]}}}
+  if(poly)map.removeLayer(poly);
+  const f=WORLD.features.find(x=>x.id===code);
+  if(f){poly=L.geoJSON(f,{style:{color:'#c2410c',weight:2,fillOpacity:0}}).addTo(map);map.fitBounds(poly.getBounds())}
+}
+/* area of interest: two clicks on the map */
+function startDraw(){drawing=true;corner=null;$('selBtn').classList.add('on');map.getContainer().style.cursor='crosshair';$('info').textContent='Click two opposite corners of your area of interest'}
+function endDraw(){drawing=false;$('selBtn').classList.remove('on');map.getContainer().style.cursor=''}
+function wholeCountry(){aoiBox=null;period=null;if(aoiRect)map.removeLayer(aoiRect);aoiRect=null;endDraw();load(+$('sel').value)}
+map.on('click',e=>{
+  if(!drawing)return;
+  if(!corner){corner=e.latlng;return}
+  const a=corner,b=e.latlng;aoiBox=[Math.min(a.lng,b.lng),Math.min(a.lat,b.lat),Math.max(a.lng,b.lng),Math.max(a.lat,b.lat)];
+  if(aoiRect)map.removeLayer(aoiRect);
+  aoiRect=L.rectangle([[aoiBox[1],aoiBox[0]],[aoiBox[3],aoiBox[2]]],{color:'#2563eb',weight:2,fillOpacity:.05}).addTo(map);
+  endDraw();period=null;load(+$('sel').value);
+});
+map.on('mousemove',e=>{if(!drawing||!corner)return;if(aoiRect)map.removeLayer(aoiRect);aoiRect=L.rectangle([corner,e.latlng],{color:'#2563eb',weight:1,dashArray:'4',fillOpacity:.05}).addTo(map)});
+/* where: density map for the whole history or for one clicked calendar week */
+function pickWeek(y,w){const f=d=>d.toISOString().slice(0,10);
+  period=[f(new Date(Date.UTC(y,0,1+7*w))),f(w===52?new Date(Date.UTC(y,11,31)):new Date(Date.UTC(y,0,7+7*w)))];loadCells()}
+function allTime(){period=null;loadCells()}
+async function loadCells(){
+  let u='/api/cells?aoi='+encodeURIComponent(cur)+(aoiBox?'&bbox='+aoiBox.join(','):'')+(period?'&from='+period[0]+'&to='+period[1]:'');
+  const r=await api(u);
+  if(cellLayer)map.removeLayer(cellLayer);
+  cellLayer=L.layerGroup().addTo(map);
+  const C=r.cell,mx=Math.max(1,...r.cells.map(c=>c[2]));
+  r.cells.forEach(([cx,cy,n])=>{const t=Math.sqrt(n/mx);
+    L.rectangle([[cy*C,cx*C],[(cy+1)*C,(cx+1)*C]],{renderer:cvs,stroke:false,fillColor:actColor(t),fillOpacity:.25+.6*t}).addTo(cellLayer)});
+  $('mapNote').textContent='Map: where it burned, '+(period?period[0]+' to '+period[1]:'all years')+'. Darker squares = more fires.';
+}
+async function load(i){
+  const a=aois[i];if(!a)return;const q=encodeURIComponent(a.code);
+  if(cur!==a.code){aoiBox=null;period=null;if(aoiRect){map.removeLayer(aoiRect);aoiRect=null}await outline(a.code);cur=a.code}
+  $('info').textContent=a.name+' ('+a.code+')'+(aoiBox?' · selected area':' · whole country');
+  try{
+    const c=await api('/api/calendar?aoi='+q+(aoiBox?'&bbox='+aoiBox.join(','):''));
+    if(c.years.length){build(c);loadCells()}
+    else{['calCard','critCard','anoCard'].forEach(i=>$(i).style.display='none');if(cellLayer)map.removeLayer(cellLayer);$('meth').textContent='–';
+      $('info').innerHTML+='<br><span class="err">No data for this country yet. The system downloads countries one by one, so this one is still waiting. Look at the first card.</span>'}
+    showStatus();
+    showFc(await api('/api/forecast?aoi='+q));
+    showLog(await api('/api/alerts?aoi='+q));
+  }catch(e){$('info').innerHTML+='<br><span class="err">Failed to load data.</span>'}
+}
+
+/* ---------- calendar + statistics ---------- */
+const fmtW=w=>{const f=d=>d.toLocaleDateString('en-GB',{day:'numeric',month:'short',timeZone:'UTC'});
+  return f(new Date(Date.UTC(2001,0,1+7*w)))+' – '+f(new Date(Date.UTC(2001,0,7+7*w)))};
+function build(c){
+  const val=c.val,years=c.years,clim=[],sd=[],z={};
+  for(let w=0;w<53;w++){
+    const a=years.map(y=>val[y+'-'+w]).filter(v=>v!==undefined);
+    const m=a.length?a.reduce((x,b)=>x+b,0)/a.length:0;
+    clim[w]=m;sd[w]=Math.max(Math.sqrt(a.reduce((x,b)=>x+(b-m)**2,0)/(a.length||1)),1);
+  }
+  years.forEach(y=>{for(let w=0;w<53;w++){const v=val[y+'-'+w];if(v!==undefined)z[y+'-'+w]=(v-clim[w])/sd[w]}});
+  R={years,val,z,max:Math.max(1,...Object.values(val))};
+  render();
+  $('crit').innerHTML=clim.map((v,w)=>({w,v})).sort((a,b)=>b.v-a.v).slice(0,5).filter(o=>o.v>0)
+    .map(o=>`<li><b>${fmtW(o.w)}</b>: on average ${o.v.toFixed(0)} fire detections per week</li>`).join('')||'<li>No fires detected in this area.</li>';
+  const an=Object.keys(z).map(k=>({k,z:z[k]})).sort((a,b)=>b.z-a.z);
+  $('anoList').innerHTML=years.length<3?'<li>Needs at least 3 years of data.</li>':
+    an.slice(0,6).filter(a=>a.z>1).map(a=>{const [y,w]=a.k.split('-');
+      return `<li><b>${y}, ${fmtW(+w)}</b>: ${val[a.k].toFixed(0)} fire detections (usually about ${clim[+w].toFixed(0)})</li>`}).join('')||'<li>Nothing unusually active.</li>';
+  $('meth').innerHTML=`Two satellite systems record fires. The older one, MODIS (since 2000), sees fewer small fires. The newer one, VIIRS (since 2012), sees more. Their raw counts cannot be compared, so old MODIS counts are converted to the VIIRS scale (multiplied by <b>${c.k.toFixed(2)}</b>, learned from the years when both were in orbit). From 2013 on, VIIRS is used directly. How closely the two agree week by week: <b>${c.r==null?'not enough data yet':c.r.toFixed(2)+' (1.00 = perfect)'}</b>. Data covers ${c.first_day} to ${c.last_day}. Numbers are for ${aoiBox?'the selected area':'the whole country'}.`;
+  ['calCard','critCard','anoCard'].forEach(i=>$(i).style.display='block');
+}
+function setMode(m){mode=m;$('mAct').classList.toggle('on',m==='act');$('mAno').classList.toggle('on',m==='ano');if(R)render()}
+const lerp=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t));
+function actColor(t){const s=[[255,247,230],[253,200,120],[240,110,50],[170,30,20],[90,10,15]],p=t*4,i=Math.min(3,Math.floor(p));return `rgb(${lerp(s[i],s[i+1],p-i)})`}
+function anoColor(z){const t=Math.max(-3,Math.min(3,z))/3;return t>=0?`rgb(${lerp([245,243,238],[185,28,28],t)})`:`rgb(${lerp([245,243,238],[37,99,235],-t)})`}
+function render(){
+  const {years,val,z,max}=R,cs=7,g=1,L0=34,T0=14;
+  let s=`<svg width="${L0+53*(cs+g)+4}" height="${T0+years.length*(cs+g)+4}" font-size="9" fill="#78808d">`;
+  ['J','F','M','A','M','J','J','A','S','O','N','D'].forEach((m,i)=>s+=`<text x="${L0+Math.round(i*53/12)*(cs+g)}" y="9">${m}</text>`);
+  years.forEach((y,r)=>{
+    s+=`<text x="0" y="${T0+r*(cs+g)+7}">${y}</text>`;
+    for(let w=0;w<53;w++){
+      const k=y+'-'+w,v=val[k],has=v!==undefined;
+      const col=!has?'#efece4':mode==='act'?actColor(Math.sqrt(v/max)):anoColor(z[k]);
+      s+=`<rect x="${L0+w*(cs+g)}" y="${T0+r*(cs+g)}" width="${cs}" height="${cs}" rx="1" fill="${col}" style="cursor:pointer" onclick="pickWeek(${y},${w})"><title>${has?`${y}, week ${w+1}: ${v.toFixed(0)} fire detections`:'no data'}</title></rect>`;
+    }
+  });
+  $('cal').innerHTML=s+'</svg>';
+  $('leg').innerHTML=mode==='act'
+    ?`0 <span class="g" style="background:linear-gradient(90deg,${actColor(0)},${actColor(.35)},${actColor(.7)},${actColor(1)})"></span> ${max.toFixed(0)} fire detections per week · grey = no data`
+    :`fewer than usual <span class="g" style="background:linear-gradient(90deg,${anoColor(-3)},${anoColor(0)},${anoColor(3)})"></span> more than usual`;
+  $('calNote').textContent=years.length<3&&mode==='ano'?'The unusual-weeks view needs at least 3 years of data.':'Hover over a square for details.';
+}
+
+/* ---------- system status ---------- */
+const ago=ts=>{const m=(Date.now()-new Date(ts))/60000;return m<1?'just now':m<90?Math.round(m)+' min ago':(m/60).toFixed(1)+' h ago'};
+function pick(code){const i=aois.findIndex(a=>a.code===code);if(i>=0){$('sel').value=i;aoiBox=null;load(i)}}
+async function showStatus(){
+  try{
+    const s=await api('/api/status'),c=s.collector;
+    const mins=c?(Date.now()-new Date(c[1]))/60000:1e9;
+    const run=!c?'<span class="err">The data collector has never run. Start it with: py firewatch.py run. If you already started it, stop it (Ctrl+C) and start it again, because an old version does not report its status.</span>':
+      mins<20?`<b style="color:#0d9488">Data collector is running.</b> Now: ${c[0]} <span class="note">(${ago(c[1])})</span>`:
+      `<b class="err">The data collector seems to be stopped.</b> Last sign of life ${ago(c[1])}. Start it again with: py firewatch.py run`;
+    const yrs=x=>x.days?(x.days/365).toFixed(1)+' yrs':'none';
+    s.countries.sort((a,b)=>b.VIIRS.days-a.VIIRS.days);
+    const tg=s.telegram&&s.telegram.token&&s.telegram.chats?`<p class="note" style="margin:6px 0 0">Telegram messages: <b style="color:#0d9488">on</b> (${s.telegram.chats} chat${s.telegram.chats>1?'s':''}).</p>`:`<p class="note" style="margin:6px 0 0">Telegram messages: <b>not set up</b>. Alerts are saved here but not sent to anyone. See README.</p>`;
+    $('status').innerHTML=run+tg+`<p style="margin:6px 0"><b>${s.overall.pct}%</b> of the full history (from the year 2000 to today, all countries) is downloaded${s.overall.eta_h!=null?'. About <b>'+s.overall.eta_h+' hours</b> left at the current speed.':'. The time left will appear once the collector has been running for a few minutes.'}</p>
+      <p class="note" style="margin:0 0 6px">Countries are loaded one after another. The new satellite (VIIRS) has only existed since 2012, so data from 2000 to 2012 comes from the old one (MODIS); the system converts both to one scale. Click a row to open a country.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:11px"><tr style="color:#8c939e;text-align:left"><th>Country</th><th>Loaded</th><th>Old satellite</th><th>New satellite</th><th>Forecast</th></tr>`+
+      s.countries.map(r=>`<tr style="cursor:pointer;border-top:1px solid #f0ece1" onclick="pick('${r.code}')"><td>${r.name}</td><td><b>${r.pct}%</b></td><td>${yrs(r.MODIS)}</td><td>${yrs(r.VIIRS)}</td>
+      <td>${r.forecast?'<span style="color:#0d9488">ready</span>':'<span class="note" title="'+(r.model||'')+'">'+(r.VIIRS.days?'waiting for more data':'no data yet')+'</span>'}${r.error?'<br><span class="err">⚠ '+r.error[0]+'</span>':''}</td></tr>`).join('')+'</table>';
+  }catch(e){$('status').innerHTML='<span class="err">Cannot read the system status ('+e.message+').</span><p class="note">Most likely api.py was not restarted after the update. Stop it (Ctrl+C), then run: py api.py</p>'}
+}
+
+/* ---------- probability forecast ---------- */
+const LV={NORMAL:['Normal','Fire activity is expected to be about usual for this time of year.'],
+  WATCH:['Elevated','More fire than usual is likely in the next days. Keep an eye on it.'],
+  WARNING:['High','Much more fire than usual is likely in the next days. Prepare.']};
+function showFc(f){
+  $('fcCard').style.display='block';const box=$('fc');
+  if(!f||!f.days){box.innerHTML='<p class="note">No forecast yet for this country. It appears automatically once enough history has been downloaded (about 3 years). See the first card.</p>';return}
+  const W=430,H=120,x0=30,bw=42,ymax=Math.max(.2,...f.days.map(d=>Math.max(d.hi,d.clim_hi)))*1.1,Y=v=>H-v/ymax*H+4;
+  let s=`<svg width="${W}" height="${H+30}" font-size="10" fill="#78808d">`;
+  [0,.5,1].forEach(v=>{const y=Y(v*ymax);s+=`<line x1="${x0}" x2="${W}" y1="${y}" y2="${y}" stroke="#eee"/><text x="0" y="${y+3}">${(v*ymax*100).toFixed(0)}%</text>`});
+  f.days.forEach((d,i)=>{const x=x0+i*(bw+2)+6;
+    s+=`<rect x="${x}" y="${Y(d.p)}" width="${bw-16}" height="${H+4-Y(d.p)}" fill="#c2410c" opacity=".8"><title>${d.date}: ${(d.p*100).toFixed(1)}% chance (range ${(d.lo*100).toFixed(1)}–${(d.hi*100).toFixed(1)}%); usual ${(d.clim*100).toFixed(1)}%. Weather: max ${d.tmax} °C, wind ${d.wind} km/h, rain over the last 7 days ${d.rain7} mm</title></rect>
+      <line x1="${x+(bw-16)/2}" x2="${x+(bw-16)/2}" y1="${Y(d.lo)}" y2="${Y(d.hi)}" stroke="#333"/>
+      <line x1="${x-3}" x2="${x+bw-13}" y1="${Y(d.clim)}" y2="${Y(d.clim)}" stroke="#2563eb" stroke-width="2"/>
+      <text x="${x}" y="${H+18}">${d.date.slice(5)}</text>`});
+  s+='</svg>';
+  const lv=LV[f.level],col={WARNING:'#be123c',WATCH:'#c2410c',NORMAL:'#0d9488'}[f.level];
+  const sv=f.season,sw=430,sh=50,mx=Math.max(...sv);
+  const sp=sv.map((v,i)=>`${(i/365*sw).toFixed(1)},${(sh-v/mx*sh+2).toFixed(1)}`).join(' ');
+  const tenth=Math.max(1,Math.round(f.event_rate*10));
+  box.innerHTML=`<div style="font-size:16px;font-weight:600;color:${col}">Risk level: ${lv[0]}</div>
+    <p style="margin:2px 0 8px">${lv[1]}</p>
+    <p style="margin:4px 0">Chance of at least one <b>high-fire day</b> in the next 3 days: <b>${(f.p3*100).toFixed(0)}%</b> (usual for this time of year: ${(f.clim3*100).toFixed(0)}%). Next 7 days: <b>${(f.p7*100).toFixed(0)}%</b>.</p>
+    <p class="note" style="margin:0 0 8px">A high-fire day is a day with at least ${Math.round(f.threshold)} fire detections by satellite in ${f.name}. About ${tenth} day${tenth>1?'s':''} in 10 reach that.</p>${s}
+    <p class="note">Each orange bar is the chance for one day. The black line shows how uncertain it is. The blue line is what is usual for that date. Hover over a bar to see the weather used.</p>
+    <p style="margin:10px 0 2px"><b>Fire season through the year</b></p>
+    <svg width="${sw}" height="${sh+6}"><polyline points="${sp}" fill="none" stroke="#c2410c" stroke-width="1.5"/><line x1="${f.doy/366*sw}" x2="${f.doy/366*sw}" y1="0" y2="${sh}" stroke="#2563eb" stroke-dasharray="3"/></svg>
+    <p class="note">The line shows how often high-fire days happen at each time of year (left = January, right = December). The dashed line is today.</p>
+    <p style="margin:10px 0 2px"><b>Can we trust this forecast?</b></p>
+    <p style="margin:2px 0">${f.validated?'Yes, so far. We tested it on the last 2 years, which it had never seen, and it did better than simply saying "usual for the season". Alerts are switched on.':'Not yet. On the last 2 years, which it had never seen, it did not do better than simply saying "usual for the season". Alerts are switched off.'} <span class="note">Score ${f.bss.toFixed(2)} (0 = no better than the seasonal average, 1 = perfect).</span></p>
+    <p class="note" style="margin:6px 0 2px">When the model said a certain chance, how often it really happened:</p>
+    <table style="font-size:11px;border-collapse:collapse"><tr><td style="padding-right:10px">Model said</td>${f.calib.map(c=>`<td style="padding-right:10px">${(c[0]*100).toFixed(0)}%</td>`).join('')}</tr>
+    <tr><td>Really happened</td>${f.calib.map(c=>`<td>${(c[1]*100).toFixed(0)}%</td>`).join('')}</tr></table>
+    <details style="margin-top:8px"><summary class="note">Technical details</summary><p class="note">Method: logistic regression on time of year, temperature, wind, rain over 7 days and evaporation, trained on ${f.n_days} days. The uncertainty line is a 90% range from re-running the model on resampled years. "At least one day in N days" assumes days are independent. Updated ${f.ts.replace('T',' ')} UTC.</p></details>`;
+}
+
+/* ---------- alert log ---------- */
+function showLog(list){
+  marks.forEach(m=>map.removeLayer(m));marks=[];
+  if(!list.length){$('log').innerHTML='<p class="note">Nothing has been sent for this country yet.</p>';return}
+  const col={WARNING:'#be123c',WATCH:'#c2410c',detection:'#7c3aed'};
+  $('log').innerHTML=list.map(a=>{
+    const det=a.kind==='detection',e=a.evidence;
+    if(det&&e.top)e.top.forEach(t=>marks.push(L.circleMarker([t.la,t.lo],{radius:6,color:'#7c3aed',fillOpacity:.3}).addTo(map).bindPopup('Candidate event, needs verification')));
+    const head=a.kind==='digest'?(e.lines||[]).join('<br>'):det?`${e.new} new fire(s) spotted by satellite in the last 24 hours`:`Chance of a high-fire day within 3 days: ${(a.p*100).toFixed(0)}% (usual for this time of year: ${(e.clim3*100).toFixed(0)}%)`;
+    return `<div class="al"><span class="badge" style="background:${col[det?'detection':a.level]||'#666'}">${det?'detection':a.kind==='digest'?'digest':a.kind==='test'?'test':a.level}</span> <b>${a.ts.replace('T',' ').slice(0,16)} UTC</b><br>${head}<br>
+      <span class="note">Delivery: ${a.delivered}</span>
+      <details><summary class="note">Details</summary><pre>${JSON.stringify(det?e:{p_days:e.days&&e.days.map(d=>[d.date,d.p]),threshold:e.threshold,calib:e.calib,k:e.k},null,1)}</pre></details></div>`}).join('');
+}
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+{
+  "history_years": 26,
+  "interval_minutes": 60,
+  "event_quantile": 0.9,
+  "min_skill": 0.05,
+  "send_unvalidated": false,
+  "thresholds": {
+    "watch": 0.4,
+    "warning": 0.7,
+    "min_lift": 1.3
+  },
+  "telegram_chats": [],
+  "countries": [
+    "UKR",
+    "POL",
+    "ROU",
+    "MDA",
+    "BLR",
+    "HUN",
+    "SVK",
+    "BGR",
+    "GRC",
+    "TUR",
+    "ITA",
+    "HRV",
+    "ALB",
+    "ESP",
+    "PRT",
+    "FRA"
+  ],
+  "daily_digest": true,
+  "workers": 12,
+  "history_phases": [
+    1,
+    3,
+    26
+  ]
+}
